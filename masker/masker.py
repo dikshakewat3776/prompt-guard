@@ -4,8 +4,8 @@ Replace detected spans with stable placeholder tokens without structural leaks.
 
 from __future__ import annotations
 
-from prompt_guard.config.default_rules import MASK_PLACEHOLDERS
-from prompt_guard.detector.sensitive_detector import SpanMatch
+from config.default_rules import MASK_PLACEHOLDERS
+from detector.sensitive_detector import SpanMatch
 
 
 class PromptMasker:

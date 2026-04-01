@@ -414,10 +414,15 @@ def flatten_sensitive_data_map(
     Returns:
         List of tuples for compilation in the detector.
     """
+    # Get the data map, default to SENSITIVE_DATA_MAP if not provided
     m = data_map if data_map is not None else SENSITIVE_DATA_MAP
+    # Initialize an empty list to store the rows
     rows: list[tuple[str, str, str, int]] = []
+    # Loop through the data map
     for domain, inner in m.items():
+        # Loop through the inner map
         for leaf_key, pattern in inner.items():
+            # Append the domain, leaf key, pattern, and flags to the rows list
             rows.append((domain, leaf_key, pattern, get_pattern_flags(domain, leaf_key)))
     return rows
 
@@ -440,15 +445,15 @@ def detect_all(
         ``findings[domain][leaf_key] = [matches...]`` (full span matches, may overlap).
     """
     findings: dict[str, dict[str, list[str]]] = {}
+    # Loop through the patterns map and compile the regex patterns
     for domain, patterns in patterns_map.items():
         for key, pattern in patterns.items():
-            try:
-                rx = re.compile(pattern, get_pattern_flags(domain, key))
-            except re.error:
-                continue
-            found: list[str] = []
-            for m in rx.finditer(text):
-                found.append(m.group(0))
+            # Compile the regex pattern
+            rx = re.compile(pattern, get_pattern_flags(domain, key))
+            # Find all matches in the text
+            found = [m.group(0) for m in rx.finditer(text)]
+            # If there are matches, add them to the findings
             if found:
                 findings.setdefault(domain, {})[key] = found
+    # Return the findings
     return findings

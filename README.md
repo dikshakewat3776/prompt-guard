@@ -327,34 +327,6 @@ With default settings, the library may create in the **current working directory
 - `prompt_guard_analytics.db` — SQLite analytics (override with `PromptGuardConfig.sqlite_path` or CLI `--sqlite`)
 
 ---
-
-## Publish to GitHub
-
-1. **Initialize git** (if not already):
-
-   ```bash
-   cd /path/to/prompt-guard
-   git init
-   git add .
-   git commit -m "Initial commit: prompt-guard backend"
-   ```
-
-2. **Create a new repository** on [GitHub](https://github.com/new) (empty, no README if you already have one locally).
-
-3. **Add the remote and push** (replace `YOUR_USER` / `prompt-guard`):
-
-   ```bash
-   git remote add origin https://github.com/YOUR_USER/prompt-guard.git
-   git branch -M main
-   git push -u origin main
-   ```
-
-4. **Confirm** `README.md`, `docs/assets/*.png`, and `tests/test_prompt_scenarios.py` are tracked (`git status`).
-
-5. **Optional:** enable **GitHub Actions** later for CI (pytest) on push/PR.
-
----
-
 ## Project layout
 
 | Path | Role |

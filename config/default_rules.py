@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-from prompt_guard.config.sensitive_data_map import (
+from .sensitive_data_map import (
     CATEGORY_SEVERITY,
     MASK_MAP,
     RISK_WEIGHTS,

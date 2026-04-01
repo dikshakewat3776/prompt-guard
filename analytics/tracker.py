@@ -111,7 +111,7 @@ class AnalyticsTracker:
                 (masked_spans, masked_spans),
             )
             for cat, n in category_counts.items():
-                key = f"cat:{cat}"
+                key = f"category:{cat}"
                 cur.execute(
                     "INSERT INTO aggregates(key, value) VALUES(?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET value = value + ?",

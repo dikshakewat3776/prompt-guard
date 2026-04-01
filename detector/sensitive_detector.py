@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
-from prompt_guard.config import PromptGuardConfig
-from prompt_guard.config.default_rules import get_default_pattern_rows
-from prompt_guard.config.sensitive_data_map import CATEGORY_SEVERITY, SENSITIVE_DATA_MAP
-from prompt_guard.utils import validation as V
+from config import PromptGuardConfig
+from config.default_rules import get_default_pattern_rows
+from config.sensitive_data_map import CATEGORY_SEVERITY, SENSITIVE_DATA_MAP
+from utils import validation as V
 
 
 @dataclass
@@ -135,6 +135,106 @@ _ENTERPRISE_DOMAINS: frozenset[str] = frozenset(
 )
 
 
+def _merge_leaf_confidence(*groups: tuple[frozenset[str], float]) -> dict[str, float]:
+    """Build a leaf -> confidence map; each key appears once (last group wins if duplicated)."""
+    out: dict[str, float] = {}
+    for keys, conf in groups:
+        for k in keys:
+            out[k] = conf
+    return out
+
+
+# Optimized lookup: non-enterprise leaves with fixed confidence (evaluated before enterprise fallback).
+# Used to set the confidence for the leaves that are not enterprise-domain leaves.
+# The confidence is a float between 0.0 and 1.0.
+# The higher the confidence, the more confident the detector is that the leaf is sensitive.
+# The lower the confidence, the less confident the detector is that the leaf is sensitive.
+# The confidence is used to determine if the leaf should be masked or not.
+# The confidence is used to determine if the leaf should be masked or not.
+_DEFAULT_LEAF_CONFIDENCE: dict[str, float] = _merge_leaf_confidence(
+    (frozenset({"pan"}), 0.92),
+    (frozenset({"ifsc"}), 0.9),
+    (
+        frozenset({"api_key_generic", "jwt_token", "aws_access_key", "github_token"}),
+        0.88,
+    ),
+    (frozenset({"private_key"}), 0.98),
+    (frozenset({"db_connection_string", "slack_token", "firebase_key"}), 0.9),
+    (frozenset({"internal_url"}), 0.65),
+    (frozenset({"email", "upi_id"}), 0.82),
+    (frozenset({"indian_phone", "phone"}), 0.8),
+    (frozenset({"ssn_us"}), 0.9),
+    (frozenset({"passport_india"}), 0.42),
+    (frozenset({"pincode_india"}), 0.35),
+    (frozenset({"dob"}), 0.55),
+    (frozenset({"ip_address"}), 0.62),
+)
+
+# O(1) lookup: enterprise-domain leaves (unknown leaf -> 0.65).
+_ENTERPRISE_LEAF_CONFIDENCE: dict[str, float] = _merge_leaf_confidence(
+    (frozenset({"internal_password"}), 0.93),
+    (frozenset({"credential_api_assignment"}), 0.91),
+    (
+        frozenset({"client_id", "portfolio_id", "transaction_id", "deal_code"}),
+        0.88,
+    ),
+    (frozenset({"amounts"}), 0.68),
+    (frozenset({"investment_details"}), 0.75),
+    (frozenset({"vpn_config", "meeting_notes"}), 0.52),
+    (frozenset({"confidential_tag", "audit_report", "mna_keywords"}), 0.72),
+    (frozenset({"pricing_strategy", "forecast"}), 0.7),
+    (frozenset({"case_id", "regulatory_ref", "nda_reference"}), 0.82),
+    (frozenset({"internal_ip"}), 0.88),
+    (frozenset({"s3_bucket"}), 0.82),
+    (frozenset({"server_names"}), 0.72),
+    (frozenset({"employee_id"}), 0.85),
+)
+
+
+def _conf_address(value: str, _t: str, _s: int, _e: int) -> tuple[float, bool]:
+    if not V.min_length_ok(value, 6):
+        return (0.0, False)
+    return (0.22, True)
+
+
+def _conf_passport_generic(value: str, _t: str, _s: int, _e: int) -> tuple[float, bool]:
+    if not V.min_length_ok(value, 6):
+        return (0.0, False)
+    return (0.25, True)
+
+
+def _conf_credit_card(value: str, _t: str, _s: int, _e: int) -> tuple[float, bool]:
+    if V.is_plausible_credit_card(value):
+        return (0.92, True)
+    return (0.0, False)
+
+
+def _conf_aadhaar(value: str, _t: str, _s: int, _e: int) -> tuple[float, bool]:
+    if V.is_plausible_aadhaar(value):
+        return (0.94, True)
+    if len(V.digits_only(value)) == 12:
+        return (0.38, True)
+    return (0.0, False)
+
+
+def _conf_bank_account(value: str, text: str, start: int, end: int) -> tuple[float, bool]:
+    if _is_indian_mobile_digits(value):
+        return (0.0, False)
+    if not _has_bank_context(text, start, end):
+        return (0.0, False)
+    return (0.78, True)
+
+
+# Value- or context-dependent leaves: O(1) dispatch by leaf name.
+_SPECIAL_LEAF_HANDLERS: dict[str, Callable[[str, str, int, int], tuple[float, bool]]] = {
+    "address": _conf_address,
+    "passport_generic": _conf_passport_generic,
+    "credit_card": _conf_credit_card,
+    "aadhaar": _conf_aadhaar,
+    "bank_account": _conf_bank_account,
+}
+
+
 def _confidence_for_leaf(
     domain: str,
     leaf: str,
@@ -146,108 +246,34 @@ def _confidence_for_leaf(
     """
     Compute confidence and whether the span should be kept.
 
+    Uses O(1) dict lookups for fixed-confidence leaves; special validators dispatch
+    by ``leaf`` name. Order matches the previous implementation: global defaults
+    before enterprise-domain rules.
+
     Returns:
         ``(confidence, keep)``. ``keep`` False drops the candidate.
     """
-    # Broad / noisy patterns: short tokens ignored (except fixed-length IDs).
-    if leaf in ("passport_generic", "address"):
-        if not V.min_length_ok(value, 6):
-            return (0.0, False)
-        base = 0.22 if leaf == "address" else 0.25
-        return (base, True)
+    special = _SPECIAL_LEAF_HANDLERS.get(leaf)
+    if special is not None:
+        # Call the special leaf handler
+        # The special leaf handler is a function that takes the value, text, start, and end
+        # The value is the matched text
+        # The text is the user prompt content
+        # The start is the start index of the matched text
+        # The end is the end index of the matched text
+        # The special leaf handler returns a tuple with the confidence and whether the span should be kept
+        return special(value, text, start, end)
 
-    if leaf == "credit_card":
-        if V.is_plausible_credit_card(value):
-            return (0.92, True)
-        return (0.0, False)
-
-    if leaf == "aadhaar":
-        if V.is_plausible_aadhaar(value):
-            return (0.94, True)
-        # Regex-only Aadhaar shape — keep with low confidence (Verhoeff may fail on typos).
-        if len(V.digits_only(value)) == 12:
-            return (0.38, True)
-        return (0.0, False)
-
-    if leaf == "bank_account":
-        if _is_indian_mobile_digits(value):
-            # Prefer ``indian_phone`` for typical mobile numbers.
-            return (0.0, False)
-        if not _has_bank_context(text, start, end):
-            return (0.0, False)
-        return (0.78, True)
-
-    if leaf == "pan":
-        return (0.92, True)
-
-    if leaf == "ifsc":
-        return (0.9, True)
-
-    if leaf in ("api_key_generic", "jwt_token", "aws_access_key", "github_token"):
-        return (0.88, True)
-
-    if leaf == "private_key":
-        return (0.98, True)
-
-    if leaf in ("db_connection_string", "slack_token", "firebase_key"):
-        return (0.9, True)
-
-    if leaf == "internal_url":
-        return (0.65, True)
-
-    if leaf in ("email", "upi_id"):
-        return (0.82, True)
-
-    if leaf in ("indian_phone", "phone"):
-        return (0.8, True)
-
-    if leaf == "ssn_us":
-        return (0.9, True)
-
-    if leaf == "passport_india":
-        return (0.42, True)
-
-    if leaf == "pincode_india":
-        return (0.35, True)
-
-    if leaf == "dob":
-        return (0.55, True)
-
-    if leaf == "ip_address":
-        return (0.62, True)
+    conf = _DEFAULT_LEAF_CONFIDENCE.get(leaf)
+    if conf is not None:
+        return (conf, True)
 
     if domain in _ENTERPRISE_DOMAINS:
-        if leaf == "internal_password":
-            return (0.93, True)
-        if leaf == "credential_api_assignment":
-            return (0.91, True)
-        if leaf in ("client_id", "portfolio_id", "transaction_id", "deal_code"):
-            return (0.88, True)
-        if leaf == "amounts":
-            return (0.68, True)
-        if leaf == "investment_details":
-            return (0.75, True)
-        if leaf in ("vpn_config", "meeting_notes"):
-            return (0.52, True)
-        if leaf in ("confidential_tag", "audit_report", "mna_keywords"):
-            return (0.72, True)
-        if leaf in ("pricing_strategy", "forecast"):
-            return (0.7, True)
-        if leaf in ("case_id", "regulatory_ref", "nda_reference"):
-            return (0.82, True)
-        if leaf == "internal_ip":
-            return (0.88, True)
-        if leaf == "s3_bucket":
-            return (0.82, True)
-        if leaf == "server_names":
-            return (0.72, True)
-        if leaf == "employee_id":
-            return (0.85, True)
-        return (0.65, True)
+        return (_ENTERPRISE_LEAF_CONFIDENCE.get(leaf, 0.65), True)
 
     if domain == "custom":
         return (0.55, True)
-
+    # If the leaf is not in the default leaf confidence or enterprise leaf confidence, return a confidence of 0.55
     return (0.55, True)
 
 
@@ -260,10 +286,17 @@ class SensitiveDetector:
             extensions and disabled categories.
     """
 
+    # Initialize the SensitiveDetector with the config
+    # The config is an optional PromptGuardConfig object
+    # If no config is provided, use the default PromptGuardConfig
     def __init__(self, config: PromptGuardConfig | None = None) -> None:
         self._config = config or PromptGuardConfig()
         self._patterns = self._config.build_pattern_list()
 
+    # Detect the sensitive data in the text
+    # The text is the user prompt content
+    # The detect method returns a SensitiveFindings object
+    # The SensitiveFindings object contains the spans, raw_by_category, nested, and matches_detail
     def detect(self, text: str) -> SensitiveFindings:
         """
         Run all configured regex rules and custom keyword matching on ``text``.
@@ -281,9 +314,9 @@ class SensitiveDetector:
                 continue
             rx = re.compile(pattern, flags)
             for m in rx.finditer(text):
-                conf, keep = _confidence_for_leaf(
-                    domain, leaf_key, m.group(0), text, m.start(), m.end()
-                )
+                # Compute the confidence for the leaf
+                # The confidence is a float between 0.0 and 1.0
+                conf, keep = _confidence_for_leaf(domain, leaf_key, m.group(0), text, m.start(), m.end())
                 if not keep:
                     continue
                 spans.append(
@@ -396,10 +429,7 @@ class SensitiveDetector:
         }
 
 
-def detect_all(
-    text: str,
-    patterns_map: dict[str, dict[str, str]] | None = None,
-) -> dict[str, dict[str, list[str]]]:
+def detect_all(text: str,patterns_map: dict[str, dict[str, str]] | None = None,) -> dict[str, dict[str, list[str]]]:
     """
     Illustrative nested regex sweep (no validators). Prefer :class:`SensitiveDetector`.
 
@@ -410,6 +440,14 @@ def detect_all(
     Returns:
         ``findings[domain][leaf] = [matches]`` (regex :func:`re.findall` semantics).
     """
-    from prompt_guard.config.sensitive_data_map import detect_all as _detect_all_map
-
+    # Import the detect_all function from the sensitive_data_map module
+    from config.sensitive_data_map import detect_all as _detect_all_map
+    # Call the detect_all function with the text and patterns_map
+    # 1. If patterns_map is not provided, use the SENSITIVE_DATA_MAP
+    # 2. The SENSITIVE_DATA_MAP is a dictionary that maps the domain to the patterns
+    # 3. The patterns are a dictionary that maps the leaf to the pattern
+    # 4. The pattern is a string that is the regex pattern
+    # 5. The leaf is a string that is the leaf key
+    # 6. The domain is a string that is the domain
+    # 7. The detect_all function returns a dictionary that maps the domain to the leaves and the matches
     return _detect_all_map(text, patterns_map or SENSITIVE_DATA_MAP)

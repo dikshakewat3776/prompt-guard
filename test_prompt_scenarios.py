@@ -19,9 +19,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prompt_guard.api.service import analyze_prompt
-from prompt_guard.analytics.tracker import AnalyticsTracker
-from prompt_guard.config import PromptGuardConfig
+from api.service import analyze_prompt
+from analytics.tracker import AnalyticsTracker
+from config import PromptGuardConfig
 
 # Populated when running as ``python tests/test_prompt_scenarios.py`` (print + test).
 _AUDIT_FIXTURE: tuple[Path, list[tuple], list[tuple]] | None = None
@@ -30,54 +30,104 @@ _AUDIT_FIXTURE: tuple[Path, list[tuple], list[tuple]] | None = None
 # (scenario_id, prompt_text, expected_risk_score)
 SCENARIOS: list[tuple[str, str, int]] = [
     (
-        "1_clean",
-        "Refactor the login handler to use async/await and add unit tests.",
+        "1_clean_code_review",
+        "Can you review this pull request and suggest improvements for error handling in the payment retry logic?",
         0,
     ),
     (
-        "2_email",
-        "Contact me at jane.doe@company.com for the API review.",
+        "2_clean_product_discussion",
+        "We need to design a better onboarding flow that reduces drop-offs during the signup process.",
+        0,
+    ),
+    (
+        "3_email_in_sentence",
+        "Hey, if you need clarification on the API contract, just drop a mail to vivek.menon@company.in and he’ll help you out.",
         4,
     ),
     (
-        "3_email_phone",
-        "Reach me at +1 (415) 555-0199 or sarah@acme.io.",
+        "4_phone_in_support_context",
+        "The delivery agent couldn’t reach me, please call me on +91 9823456789 to coordinate the package drop.",
+        4,
+    ),
+    (
+        "5_email_phone_realistic",
+        "You can contact our regional manager at neha@retailco.in or call her directly at +91-9123456780 for urgent approvals.",
         8,
     ),
     (
-        "4_india_pan_ifsc",
-        "PAN ABCDE1234F bank IFSC HDFC0001234 for the refund.",
-        16,
+        "6_pan_customer_support",
+        "Hi, I’m submitting my PAN (ABCDE1234F) for verification, please update my account status once it’s validated.",
+        8,
     ),
     (
-        "5_api_key",
-        "Use this key in dev only: sk-1234567890123456789012345678",
+        "7_aadhaar_kyc_flow",
+        "For completing KYC, I’ve uploaded my Aadhaar number 5678 1234 9876 along with the required documents.",
+        9,
+    ),
+    (
+        "8_pan_aadhaar_financial",
+        "My PAN is AAAPL1234C and Aadhaar is 4321 8765 2109, both are linked to my bank account for tax filing purposes.",
+        17,
+    ),
+    (
+        "9_bank_transfer_request",
+        "Please process the refund to my account number 123456789876 with IFSC ICIC0004321 by end of day.",
+        17,
+    ),
+    (
+        "10_credit_card_checkout",
+        "You can charge the amount to my card 4111111111111111 exp 10/28, let me know once the payment goes through.",
+        9,
+    ),
+    (
+        "11_credit_card_full_details",
+        "Use my corporate card 5555444433331111 exp 09/27 CVV 456 for booking the flight tickets.",
+        12,
+    ),
+    (
+        "12_api_key_shared_in_chat",
+        "For testing in staging, you can temporarily use this API key: sk-test-1234567890abcdef123456.",
+        0,
+    ),
+    (
+        "13_jwt_in_debugging",
+        "I’m attaching the bearer token here: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.xyz.abc so you can debug the auth issue.",
         10,
     ),
     (
-        "6_jwt",
-        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XggTsoPtgdQ0Qf_obqQ3k",
-        10,
+        "14_password_shared",
+        "You can log into the admin panel using username admin and password Admin@123 until we reset access.",
+        5,
     ),
     (
-        "7_profanity",
-        "This bug is shit and blocking the release.",
+        "15_enterprise_sensitive_deal",
+        "This is confidential: CLIENT-5566 acquisition deal details, internal case CASE-77, password is Merge@2026, do not share outside leadership.",
+        44,
+    ),
+    (
+        "16_internal_project_leak",
+        "The FalconX project is still under stealth, please don’t mention 'falconx-internal-beta' outside this channel.",
+        0,
+    ),
+    (
+        "17_invoice_payment_realistic",
+        "Kindly release INR 1,25,000 to vendor account 998877665544 with IFSC HDFC0001122 against invoice INV-9087.",
+        26,
+    ),
+    (
+        "18_mixed_sensitive_real_world",
+        "Please contact me at arjun@gmail.com, my Aadhaar is 2345 6789 0123 and you can use API key sk-abc123456789 for testing.",
+        13,
+    ),
+    (
+        "19_profanity_dev_context",
+        "This deployment is completely broken and the API responses are slow as hell, we need to fix this urgently.",
         2,
     ),
     (
-        "8_enterprise",
-        "CLIENT-9001 TXN-123456789 password: SuperSecret99 merger acquisition CASE-42",
-        53,
-    ),
-    (
-        "9_credit_card",
-        "Charge 4242424242424242 exp 12/28 for the invoice USD 1,250.00",
-        18,
-    ),
-    (
-        "10_mixed",
-        "Email a@b.com Aadhaar 2345 2345 2342 sk-1234567890123456789012345678",
-        23,
+        "20_profanity_with_pressure",
+        "The client is pissed because the dashboard is still not loading, can someone fix this damn issue today?",
+        2,
     ),
 ]
 
@@ -155,13 +205,16 @@ class PromptScenarioAuditTests(unittest.TestCase):
         self.assertEqual(len(SCENARIOS), len(self._req))
 
     def test_risk_scores_match_expected(self) -> None:
+        # Report every mismatch in one failure (unittest would otherwise stop at the first row).
+        mismatches: list[str] = []
         for i, (sid, _prompt, expected_risk) in enumerate(SCENARIOS):
             risk = self._req[i][3]
-            self.assertEqual(
-                expected_risk,
-                risk,
-                msg=f"{sid}: expected risk {expected_risk}, got {risk}",
-            )
+            if risk != expected_risk:
+                mismatches.append(f"{sid}: expected {expected_risk}, got {risk}")
+        self.assertFalse(
+            mismatches,
+            "risk_score mismatches:\n" + "\n".join(mismatches),
+        )
 
     def test_findings_json_maps_categories_to_counts(self) -> None:
         for row in self._req:
