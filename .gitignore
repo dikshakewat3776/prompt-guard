@@ -1,0 +1,62 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+
+# Installer / packaging
+*.manifest
+*.spec
+
+# Testing & quality
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+mypy_cache/
+.ruff_cache/
+*.cover
+.hypothesis/
+
+# Environment & secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Logs & local DB (runtime artifacts)
+*.log
+prompt_guard.log
+prompt_guard.log.*
+prompt_guard_analytics.db
+prompt_guard_analytics.db-wal
+prompt_guard_analytics.db-shm
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Cursor / local tooling (optional)
+.cursor/

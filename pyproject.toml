@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompt-guard"
+version = "0.1.0"
+description = "Pluggable backend for detecting and masking sensitive data in AI prompts"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "prompt-guard contributors" }]
+keywords = ["prompt", "security", "pii", "masking", "ai", "cursor", "copilot"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.4"]
+mcp = ["mcp>=1.0.0"]
+
+[project.scripts]
+prompt-guard = "prompt_guard.cli:main"
+prompt-guard-mcp = "prompt_guard_mcp:main"
+
+# Flat layout: package ``prompt_guard`` maps to the project root (see setuptools docs).
+[tool.setuptools]
+package-dir = { "prompt_guard" = "." }
+packages = [
+  "prompt_guard",
+  "prompt_guard.api",
+  "prompt_guard.analytics",
+  "prompt_guard.config",
+  "prompt_guard.detector",
+  "prompt_guard.logger",
+  "prompt_guard.masker",
+  "prompt_guard.utils",
+]
+py-modules = ["prompt_guard_mcp"]
+
+[tool.setuptools.package-data]
+prompt_guard = ["py.typed"]
